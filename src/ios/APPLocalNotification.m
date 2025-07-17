@@ -489,44 +489,39 @@ UNNotificationPresentationOptions const OptionAlert = UNNotificationPresentation
     BOOL isPush = [request.trigger isKindOfClass:UNPushNotificationTrigger.class];
 
     /* -----------------------------------------------------------
-     * 1.  Remote push → let the “old” delegate (e.g. FCM) handle it
-     *     and exit.  We do NOT touch local-notification code here.
+     * 1.  Remote push → pass straight to the *real* delegate (FCM)
+     *     and return, so we don’t bounce back and forth.
      * --------------------------------------------------------- */
     if (isPush) {
         if (_delegate &&
-            [_delegate respondsToSelector:@selector(userNotificationCenter:willPresentNotification:withCompletionHandler:)]) {
+            [_delegate respondsToSelector:@selector(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:)]) {
             [_delegate userNotificationCenter:center
-                     willPresentNotification:notification
-                       withCompletionHandler:handler];
+                 didReceiveNotificationResponse:response
+                           withCompletionHandler:handler];
         } else {
-            // Fallback: show it with default options if nobody else does.
-            handler(UNNotificationPresentationOptionBadge |
-                    UNNotificationPresentationOptionSound |
-                    UNNotificationPresentationOptionAlert);
+            handler();   // nobody else handled it – finish gracefully
         }
-        return;   // ⚠️ Important: stop here so we don’t re-enter ourselves.
+        return;          // ⚠️  STOP: no further processing for remote push
     }
 
     /* -----------------------------------------------------------
-     * 2.  Local notification → handle entirely inside this plugin
-     *     (no delegate forwarding to avoid recursion loop).
+     * 2.  Local notification → handle inside this plugin only.
+     *     (Existing logic – unchanged – starts here.)
      * --------------------------------------------------------- */
-    APPNotificationOptions *options = request.options;
-
-    if (![request wasUpdated]) {
-        [self fireEvent:@"trigger" notification:request];
+    if ([response.actionIdentifier isEqualToString:UNNotificationDismissActionIdentifier]) {
+        [self fireEvent:@"clear" notification:request];
+    }
+    else if ([response.actionIdentifier isEqualToString:UNNotificationDefaultActionIdentifier]) {
+        [self fireEvent:@"click" notification:request];
+    }
+    else { /* custom action button */
+        NSMutableDictionary *userInfo = [request.content.userInfo mutableCopy] ?: [NSMutableDictionary dictionary];
+        userInfo[@"actionId"] = response.actionIdentifier;
+        [self fireEvent:@"action" notification:request userInfo:userInfo];
     }
 
-    if (options.silent) {
-        handler(UNNotificationPresentationOptionNone);
-    } else if (!isActive || options.priority > 0) {
-        handler(UNNotificationPresentationOptionBadge |
-                UNNotificationPresentationOptionSound |
-                UNNotificationPresentationOptionAlert);
-    } else {
-        handler(UNNotificationPresentationOptionBadge |
-                UNNotificationPresentationOptionSound);
-    }
+    /* MUST be called exactly once for every path */
+    handler();
 }
 
 
