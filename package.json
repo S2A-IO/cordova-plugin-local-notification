@@ -1,6 +1,6 @@
 {
   "name": "@s2a/cordova-plugin-local-notification",
-  "version": "0.9.0-moodle.11-c",
+  "version": "0.9.0-moodle.11-d",
   "description": "Moodle's fork of Cordova Local Notifications Plugin",
   "cordova": {
     "id": "cordova-plugin-local-notification",

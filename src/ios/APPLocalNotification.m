@@ -482,31 +482,31 @@ UNNotificationPresentationOptions const OptionAlert = UNNotificationPresentation
  *    breaking the recursive loop that caused the crash.
  */
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
-       willPresentNotification:(UNNotification *)notification
-         withCompletionHandler:(void (^)(UNNotificationPresentationOptions options))handler
+       didReceiveNotificationResponse:(UNNotificationResponse *)response
+                 withCompletionHandler:(void (^)(void))completionHandler
 {
-    UNNotificationRequest *request = notification.request;
-    BOOL isPush = [request.trigger isKindOfClass:UNPushNotificationTrigger.class];
+    UNNotificationRequest *request   = response.notification.request;
+    BOOL isRemotePush                = [request.trigger isKindOfClass:UNPushNotificationTrigger.class];
 
     /* -----------------------------------------------------------
-     * 1.  Remote push → pass straight to the *real* delegate (FCM)
-     *     and return, so we don’t bounce back and forth.
+     * 1. Remote push → hand off to the previous delegate once
+     *    and return, so we never recurse back into this plugin.
      * --------------------------------------------------------- */
-    if (isPush) {
+    if (isRemotePush) {
         if (_delegate &&
-            [_delegate respondsToSelector:@selector(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:)]) {
+            [_delegate respondsToSelector:@selector(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:)])
+        {
             [_delegate userNotificationCenter:center
                  didReceiveNotificationResponse:response
-                           withCompletionHandler:handler];
+                           withCompletionHandler:completionHandler];
         } else {
-            handler();   // nobody else handled it – finish gracefully
+            completionHandler();        // finish gracefully
         }
-        return;          // ⚠️  STOP: no further processing for remote push
+        return;                         // ⚠️  STOP for remote pushes
     }
 
     /* -----------------------------------------------------------
-     * 2.  Local notification → handle inside this plugin only.
-     *     (Existing logic – unchanged – starts here.)
+     * 2. Local notification → handle inside this plugin only.
      * --------------------------------------------------------- */
     if ([response.actionIdentifier isEqualToString:UNNotificationDismissActionIdentifier]) {
         [self fireEvent:@"clear" notification:request];
@@ -515,13 +515,11 @@ UNNotificationPresentationOptions const OptionAlert = UNNotificationPresentation
         [self fireEvent:@"click" notification:request];
     }
     else { /* custom action button */
-        NSMutableDictionary *userInfo = [request.content.userInfo mutableCopy] ?: [NSMutableDictionary dictionary];
-        userInfo[@"actionId"] = response.actionIdentifier;
-        [self fireEvent:@"action" notification:request userInfo:userInfo];
+        [self fireEvent:@"action" notification:request];
     }
 
-    /* MUST be called exactly once for every path */
-    handler();
+    /* MUST be called exactly once for every execution path */
+    completionHandler();
 }
 
 
