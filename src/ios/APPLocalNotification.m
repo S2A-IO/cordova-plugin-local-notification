@@ -482,6 +482,54 @@ UNNotificationPresentationOptions const OptionAlert = UNNotificationPresentation
  *    breaking the recursive loop that caused the crash.
  */
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
+       willPresentNotification:(UNNotification *)notification
+         withCompletionHandler:(void (^)(UNNotificationPresentationOptions options))handler
+{
+    UNNotificationRequest *request = notification.request;
+    BOOL isPush = [request.trigger isKindOfClass:UNPushNotificationTrigger.class];
+
+    /* -----------------------------------------------------------
+     * 1.  Remote push → pass straight to the *real* delegate (FCM)
+     *     and return, so we don’t bounce back and forth.
+     * --------------------------------------------------------- */
+    if (isPush) {
+        if (_delegate &&
+            [_delegate respondsToSelector:@selector(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:)]) {
+            [_delegate userNotificationCenter:center
+                 didReceiveNotificationResponse:response
+                           withCompletionHandler:handler];
+        } else {
+            handler();   // nobody else handled it – finish gracefully
+        }
+        return;          // ⚠️  STOP: no further processing for remote push
+    }
+
+    /* -----------------------------------------------------------
+     * 2.  Local notification → handle inside this plugin only.
+     *     (Existing logic – unchanged – starts here.)
+     * --------------------------------------------------------- */
+    if ([response.actionIdentifier isEqualToString:UNNotificationDismissActionIdentifier]) {
+        [self fireEvent:@"clear" notification:request];
+    }
+    else if ([response.actionIdentifier isEqualToString:UNNotificationDefaultActionIdentifier]) {
+        [self fireEvent:@"click" notification:request];
+    }
+    else { /* custom action button */
+        NSMutableDictionary *userInfo = [request.content.userInfo mutableCopy] ?: [NSMutableDictionary dictionary];
+        userInfo[@"actionId"] = response.actionIdentifier;
+        [self fireEvent:@"action" notification:request userInfo:userInfo];
+    }
+
+    /* MUST be called exactly once for every path */
+    handler();
+}
+
+
+/**
+ * Called to let your app know which action was selected by the user for a given
+ * notification.
+ */
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
        didReceiveNotificationResponse:(UNNotificationResponse *)response
                  withCompletionHandler:(void (^)(void))completionHandler
 {
@@ -520,53 +568,6 @@ UNNotificationPresentationOptions const OptionAlert = UNNotificationPresentation
 
     /* MUST be called exactly once for every execution path */
     completionHandler();
-}
-
-
-/**
- * Called to let your app know which action was selected by the user for a given
- * notification.
- */
-- (void) userNotificationCenter:(UNUserNotificationCenter *)center
- didReceiveNotificationResponse:(UNNotificationResponse *)response
-          withCompletionHandler:(void (^)(void))handler
-{
-    UNNotificationRequest* toast = response.notification.request;
-
-    [_delegate userNotificationCenter:center
-       didReceiveNotificationResponse:response
-                withCompletionHandler:handler];
-
-    handler();
-
-    if ([toast.trigger isKindOfClass:UNPushNotificationTrigger.class])
-        return;
-
-    NSMutableDictionary* data = [[NSMutableDictionary alloc] init];
-    NSString* action          = response.actionIdentifier;
-    NSString* event           = action;
-
-    if ([action isEqualToString:UNNotificationDefaultActionIdentifier]) {
-        event = @"click";
-    } else
-    if ([action isEqualToString:UNNotificationDismissActionIdentifier]) {
-        event = @"clear";
-    }
-
-    if (!deviceready && [event isEqualToString:@"click"]) {
-        _launchDetails = @[toast.options.id, event];
-    }
-
-    if (![event isEqualToString:@"clear"]) {
-        [self fireEvent:@"clear" notification:toast];
-    }
-
-    if ([response isKindOfClass:UNTextInputNotificationResponse.class]) {
-        [data setObject:((UNTextInputNotificationResponse*) response).userText
-                 forKey:@"text"];
-    }
-
-    [self fireEvent:event notification:toast data:data];
 }
 
 #pragma mark -
